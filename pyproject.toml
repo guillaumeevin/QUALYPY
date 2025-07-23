@@ -17,8 +17,7 @@ maintainers = [
   {name = "Guillaume Evin", email = "guillaume.evin@inrae.fr"},
 ]
 readme = "README.md"
-license = "GPL-3.0-or-later"
-license-files = ["COPYING"]
+license = {file = "LICENSE"}
 classifiers = [
   "Development Status :: 1 - First version",
   "Natural Language :: English",
