@@ -5,16 +5,13 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import statsmodels.api as sm
 from statsmodels.formula.api import ols
-from scipy.stats import linregress
-from scipy.interpolate import UnivariateSpline
+from statsmodels.nonparametric.smoothers_lowess import lowess
 
 ####################################################################
 # FUNCTION RUN_EXAMPLE_QUALYPY
 ####################################################################
 def run_example_QUALYPY():
-    
     # prepare inputs of the data: a single pandas.DataFrame where
     # - there is one column corresponding to the predictand (e.g. annual precipitation amounts for a future period)
     # - the is one optional column corresponding to the continuous predictor (time, warming level)
@@ -90,7 +87,7 @@ def run_example_QUALYPY():
     # type of change: "absolute" or "relative"
     type_change = "absolute"
 
-    list_anova_input = get_ccr_mme(dfTest,name_effect,type_change,X,Y,Xpred)
+    list_anova_input = get_ccr_mme_lowess(dfTest,name_effect,type_change,X,Y,Xpred)
     
     # FIGURE 1: Climate responses
     plt.figure(figsize=(10, 6))
@@ -147,7 +144,7 @@ def clean_y(y):
 # FUNCTION GET_CCR_MME
 ####################################################################
 
-def get_ccr_mme(df,name_effect,type_change,X,Y,Xpred):
+def get_ccr_mme_lowess(df,name_effect,type_change,X,Y,Xpred):
     """
     Extract climate responses (CR), climate changes responses (CCR), and deviations (DEV_CCR) from these climate change responses
     due to internal variability. The climate response is obtained using smoothing splines applied to each raw climate simulation.
@@ -196,51 +193,17 @@ def get_ccr_mme(df,name_effect,type_change,X,Y,Xpred):
         fitted climate response.
         """
 
+    # Scherrer et al. 2024 advise for lowess smoothing for the extraction
+    # of long-term climate responses: 10.1016/j.cliser.2023.100428
+    # they suggest a fixed parameter for the degree of smoothing which
+    # corresponses to a local window of 42 years for the local smoothing
+    nyloess = 42
+
     # process ensemble: array nS x nY of projections
     df_effect_type_raw = df.drop_duplicates(subset=name_effect)
     df_effect_type = df_effect_type_raw[name_effect]
 
-    # step 0: rescale data to ease the choice of the smoothing parameter
-    vec_scale = []
-    for comb,subdf in df.groupby(name_effect):
-        # extract continuous predictand/predictor
-        data_linregress_raw = {'x': subdf[X], 'y': subdf[Y]}
-        df_linregress_raw = pd.DataFrame(data_linregress_raw)
-        df_linregress = df_linregress_raw.dropna()
-        
-        # Linear regression
-        lr = linregress(df_linregress['x'], df_linregress['y']) #x and y are arrays or lists.
-        y_predicted = lr.slope * df_linregress['x'] + lr.intercept
-        residuals = df_linregress['y'] - y_predicted
-        vec_scale.append(np.std(residuals))
-
-    # scale if the standard deviation around the linear regression for each climate simulation
-    scale = np.mean(vec_scale)
-
-    # step 1: find the smoothing parameter
-    smoothing_par = 0
-    for comb,subdf in df.groupby(name_effect):
-        
-        # extract continuous predictand/predictor
-        x_i = subdf[X]
-        y_i, w_i = clean_y(subdf[Y])
-        
-        nb_nonmotonic_change = len(y_i)
-        while nb_nonmotonic_change>2:
-            # Apply a cubic spline interpolator on scaled values
-            spl = UnivariateSpline(x_i,y_i/scale,w_i,s=smoothing_par)
-            cr_iS = spl(x_i)
-        
-            # number of times the sign of change is changing in the smoothed climate response
-            # if it happens too many times, we consider that it should be smoothed more
-            sign_change = np.sign(np.diff(cr_iS))
-            nb_direction_change = abs(np.diff(sign_change))
-            nb_nonmotonic_change = sum(nb_direction_change)/2
-            
-            if(nb_nonmotonic_change>0):
-                smoothing_par = smoothing_par+1
-
-    # step 2 and 3: apply smoothing splines to the scenarios
+    # step 1 and 2: apply smoothing splines to the scenarios
     # and compute climate change responses
     list_anova_input = list()
 
@@ -255,12 +218,10 @@ def get_ccr_mme(df,name_effect,type_change,X,Y,Xpred):
         x_i = subdf[X]
         y_i, w_i = clean_y(subdf[Y])
         
-        # Create a cubic spline interpolator
-        spl = UnivariateSpline(x_i,y_i/scale,w_i,s=smoothing_par)
-        
-        # climate response rescaled
-        cr_fitted = spl(x_i)*scale
-        cr_predicted = spl(Xpred)*scale
+        # lowess smoothing (Scherrer et al., 2024)
+        lowess_smoothed = lowess(y_i, x_i, frac=nyloess/len(y_i), it=0)
+        cr_fitted = lowess_smoothed[:, 1]
+        cr_predicted = lowess(y_i, x_i, frac=nyloess/len(y_i), xvals=Xpred, it=0)
         cr_ref = cr_predicted[0]
         
         # climate change response ccr_i and deviation from the climate response dev_ccr_i
@@ -334,7 +295,7 @@ def apply_anova_mme(df,name_effect,type_change,X,Y,Xpred):
         - name of the factor: contribution of each value of the factor to the variance for each time in Xpred
         """
   
-    list_anova_input = get_ccr_mme(df,name_effect,type_change,X,Y,Xpred)
+    list_anova_input = get_ccr_mme_lowess(df,name_effect,type_change,X,Y,Xpred)
 
     list_anova_output = list()
 
